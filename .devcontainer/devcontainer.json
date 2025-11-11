@@ -1,0 +1,50 @@
+{
+    "name": "dev-cyrpto-diff-azurefunctions",
+    "dockerFile": "Dockerfile.dev",
+    "overrideCommand": false,
+    // Let Dev Containers do ephemeral runs as usual,
+    // so DO NOT add "overrideCommand": false 
+    // or any "postStartCommand" that starts Azurite.
+    "runArgs": [
+        "--privileged",
+        "--platform=linux/amd64" // Force x86 environment at runtime too
+    ],
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.shell.linux": "/bin/bash"
+            },
+            "extensions": [
+                "ms-dotnettools.csharp",
+                "ms-azuretools.vscode-docker",
+                "eamodio.gitlens",
+                "GitHub.copilot",
+                "ms-dotnettools.csdevkit",
+                "ms-azuretools.vscode-azurefunctions",
+                "ms-python.vscode-pylance",
+                "ms-python.python",
+                "ms-python.debugpy",
+                "GrapeCity.gc-excelviewer",
+                "Azurite.azurite"
+            ]
+        }
+    },
+    "mounts": [
+        "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+    ],
+    "remoteEnv": {
+        "DOCKER_HOST": "unix:///var/run/docker.sock"
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+    },
+    "forwardPorts": [
+        5050,
+        5051,
+        1433,
+        7071,
+        10000,
+        10001,
+        10002
+    ]
+}

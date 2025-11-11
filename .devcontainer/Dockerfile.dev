@@ -1,0 +1,50 @@
+# Dockerfile.Dev
+
+# 1) Force x86 on Apple Silicon
+FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:8.0 AS build
+
+# Install necessary build tools and diagnostic utilities
+RUN apt-get update && \
+    apt-get install -y \
+    curl \
+    gnupg \
+    lsb-release \
+    apt-transport-https \
+    clang \
+    gcc \
+    libc6-dev \
+    libunwind-dev \
+    zlib1g-dev \
+    nodejs \
+    npm \
+    net-tools \
+    procps \
+    supervisor \
+    jq
+
+# Install Azure CLI
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+# ------------------------------------------------------------------------
+# Install Azure Functions Core Tools (v4)
+# ------------------------------------------------------------------------
+RUN curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg && \
+    mv microsoft.gpg /etc/apt/trusted.gpg.d/microsoft.gpg && \
+    rm -f /etc/apt/sources.list.d/azure-cli.sources && \
+    echo "deb [arch=amd64] https://packages.microsoft.com/debian/11/prod bullseye main" \
+    > /etc/apt/sources.list.d/azure-functions-core-tools.list && \
+    apt-get update && \
+    apt-get install -y azure-functions-core-tools-4 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Azurite globally
+RUN npm install -g azurite
+
+# Copy your Supervisor config
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Supervisor is our container's entrypoint. 
+# It's the only way we could get Azurerite to Autostart and stay alive. 
+ENTRYPOINT ["/usr/bin/supervisord"]
+CMD ["-n"]
