@@ -23,12 +23,13 @@ CryptoDiffs provides on-demand and scheduled calculations of cryptocurrency pric
 
 ### Key Capabilities
 
-- **On-Demand Calculations**: HTTP-triggered price difference computations
-- **Scheduled Execution**: Timer-triggered automatic calculations every 5 minutes
+- **On-Demand Calculations**: HTTP-triggered price difference computations with custom parameters
+- **Scheduled Execution**: Timer-triggered automatic calculations every 3 minutes using default settings
 - **Excel Reporting**: Generate formatted Excel (.xlsx) reports with metadata
-- **Email Integration**: Send reports via Gmail (OAuth2 or App Password)
+- **Email Integration**: Send reports via Microsoft Graph API with To, CC, and BCC support
 - **Smart Caching**: Optional in-memory caching to reduce API calls
-- **Comprehensive Logging**: Application Insights integration with custom metrics
+- **Comprehensive Logging**: Cosmos DB logging for all executions, stages, and errors
+- **Azure Key Vault Integration**: Secure secret management with local fallback
 
 ## ✨ Features
 
@@ -37,12 +38,14 @@ CryptoDiffs provides on-demand and scheduled calculations of cryptocurrency pric
 #### HTTP Trigger (Manual)
 - **Endpoint**: `/api/PriceDiffHttpFunction` (default route based on function name)
 - **Method**: `GET` or `POST`
-- **Authentication**: Function key required (`AuthorizationLevel.Function`)
+- **Authentication**: No authentication required (`AuthorizationLevel.Anonymous`) - suitable for local development and internal networks
+- **⚠️ Production Note**: For production deployments, consider changing to `AuthorizationLevel.Function` or using Azure App Service Authentication
 
 #### Timer Trigger (Automatic)
-- **Schedule**: Every 5 minutes (`0 */5 * * * *` CRON expression)
-- **Behavior**: Picks a random symbol from configured list
-- **Output**: Logs results, optional email based on configuration
+- **Schedule**: Every 3 minutes (`0 */3 * * * *` CRON expression)
+- **Behavior**: Picks a random symbol from configured list, uses default periods and settings
+- **Output**: Logs results to Cosmos DB, optional email based on configuration
+- **Defaults**: Uses `DEFAULT_PERIODS` and `DEFAULT_INTERVAL` from configuration
 
 ### 2. Market Data Integration (Binance)
 
@@ -85,10 +88,14 @@ For each configured period (e.g., 60, 90 days):
 
 ### 6. Logging & Observability
 
-- Application Insights traces and custom events
-- Custom event: `PriceDiffComputed` with `{ symbol, periods, trigger: http|timer }`
-- Metrics: `binance_latency_ms`, `binance_status`, `cache_hit`
-- Clear error payloads on failures (invalid symbol, empty data, network issues)
+- **Cosmos DB Logging**: Comprehensive execution logging to Azure Cosmos DB
+  - Execution logs: Full request/response tracking, duration, status
+  - Stage logs: Individual operation stages (RequestParsing, Validation, BinanceFetch, Calculation, ExcelGeneration, EmailSending)
+  - Error tracking: Detailed error information with stack traces
+  - Email logging: Complete recipient information (To, CC, BCC), MessageId, attachment details
+- **Serilog Integration**: Structured logging to console and daily rolling files
+- **Application Insights**: Custom events and metrics
+- **Metrics**: `binance_latency_ms`, `binance_status`, `cache_hit`
 
 ### 7. Validation & Security
 
@@ -98,7 +105,8 @@ For each configured period (e.g., 60, 90 days):
   - Maximum list length: 10 periods
 - **Security**: 
   - HTTP function protected via Function key (or EasyAuth in Azure)
-  - Secrets stored in App Settings or Azure Key Vault
+  - **Azure Key Vault Integration**: Secure secret management with automatic fallback to local configuration
+  - Secrets prioritized: Key Vault → Local Configuration → Defaults
 
 ## 🏗️ Architecture
 
@@ -126,6 +134,18 @@ For each configured period (e.g., 60, 90 days):
            ┌────────────▼────────────┐
            │   ExcelService (opt)    │
            │   EmailService (opt)    │
+           └────────────┬────────────┘
+                        │
+           ┌────────────▼────────────┐
+           │  CosmosDbLoggingService  │
+           │  (Execution & stage     │
+           │   logging to Cosmos DB) │
+           └─────────────────────────┘
+                        │
+           ┌────────────▼────────────┐
+           │    KeyVaultService       │
+           │  (Secure config with     │
+           │   local fallback)       │
            └─────────────────────────┘
 ```
 
@@ -166,31 +186,46 @@ Create `local.settings.json` in the project root (not committed to repo):
     "MAIL_TO": "your-email@gmail.com",
     "MAIL_FROM": "your-email@gmail.com",
     "USE_OAUTH": "true",
-    "GMAIL_OAUTH_CLIENT_ID": "your-client-id",
-    "GMAIL_OAUTH_CLIENT_SECRET": "your-client-secret",
-    "GMAIL_OAUTH_REFRESH_TOKEN": "your-refresh-token",
+    "GRAPH_CLIENT_ID": "your-client-id",
+    "GRAPH_CLIENT_SECRET": "your-client-secret",
+    "GRAPH_TENANT_ID": "your-tenant-id",
     "ENABLE_CACHE": "true",
-    "CACHE_TTL_SECONDS": "300"
+    "CACHE_TTL_SECONDS": "300",
+    "COSMOS_DB_CONNECTION_STRING": "AccountEndpoint=https://your-account.documents.azure.com:443/;AccountKey=your-key;",
+    "COSMOS_DB_DATABASE_NAME": "cryptodiffs-logs",
+    "COSMOS_DB_CONTAINER_NAME": "execution-logs",
+    "KEY_VAULT_NAME": "your-keyvault-name"
   }
 }
 ```
 
-### 3. Gmail OAuth2 Setup (Recommended)
+### 3. Microsoft Graph Setup (Email)
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select existing
-3. Enable Gmail API
-4. Create OAuth 2.0 credentials (Desktop app type)
-5. Download credentials and obtain refresh token
-6. Add credentials to `local.settings.json`
+1. Go to [Azure Portal](https://portal.azure.com/)
+2. Register an Azure AD application
+3. Grant `Mail.Send` permission (Application permission)
+4. Create a client secret
+5. Add credentials to `local.settings.json`:
+   - `GRAPH_CLIENT_ID`: Application (client) ID
+   - `GRAPH_CLIENT_SECRET`: Client secret value
+   - `GRAPH_TENANT_ID`: Directory (tenant) ID
 
-### 4. Gmail App Password Setup (Alternative)
+### 4. Azure Key Vault Setup (Optional but Recommended)
 
-1. Enable 2FA on your Gmail account
-2. Generate App Password: [Google Account Settings](https://myaccount.google.com/apppasswords)
-3. Set `USE_OAUTH=false` and configure:
-   - `GMAIL_USER`: Your Gmail address
-   - `GMAIL_APP_PASSWORD`: Generated app password
+1. Install Azure CLI: [Install Azure CLI](https://aka.ms/InstallAzureCLI)
+2. Login to Azure:
+   ```bash
+   ./scripts/manage-keyvault.sh login
+   ```
+3. Create Key Vault:
+   ```bash
+   ./scripts/manage-keyvault.sh create --vault-name cryptodiffs-kv --resource-group cryptodiffs-rg --location eastus
+   ```
+4. Set all secrets from local.settings.json:
+   ```bash
+   ./scripts/manage-keyvault.sh setup-all --vault-name cryptodiffs-kv
+   ```
+5. Add `KEY_VAULT_NAME` to your Function App settings in Azure Portal
 
 ### 5. Run Locally
 
@@ -214,7 +249,7 @@ func start
 # Function keys are displayed in the format: ?code=YOUR_FUNCTION_KEY
 ```
 
-**Note**: When `func start` runs, it will display the function keys in the console output. Copy the key for authentication.
+**Note**: The HTTP function uses `AuthorizationLevel.Anonymous`, so no function key is required for local testing. For production, consider enabling authentication.
 
 ## ⚙️ Configuration
 
@@ -233,14 +268,17 @@ All settings can be configured via `local.settings.json` (local) or Azure App Se
 | `EMAIL_ON_TIMER` | Enable email on timer trigger | `false` | No |
 | `MAIL_TO` | Recipient email address | - | Yes (if email enabled) |
 | `MAIL_FROM` | Sender email address | - | Yes (if email enabled) |
-| `USE_OAUTH` | Use OAuth2 (true) or App Password (false) | `true` | Yes (if email enabled) |
-| `GMAIL_OAUTH_CLIENT_ID` | OAuth2 client ID | - | Yes (if OAuth2) |
-| `GMAIL_OAUTH_CLIENT_SECRET` | OAuth2 client secret | - | Yes (if OAuth2) |
-| `GMAIL_OAUTH_REFRESH_TOKEN` | OAuth2 refresh token | - | Yes (if OAuth2) |
-| `GMAIL_USER` | Gmail username | - | Yes (if App Password) |
-| `GMAIL_APP_PASSWORD` | Gmail app password | - | Yes (if App Password) |
+| `MAIL_CC` | CC recipient email addresses (comma-separated) | - | No |
+| `MAIL_BCC` | BCC recipient email addresses (comma-separated) | - | No |
+| `GRAPH_CLIENT_ID` | Microsoft Graph client ID | - | Yes (if email enabled) |
+| `GRAPH_CLIENT_SECRET` | Microsoft Graph client secret | - | Yes (if email enabled) |
+| `GRAPH_TENANT_ID` | Microsoft Graph tenant ID | - | Yes (if email enabled) |
 | `ENABLE_CACHE` | Enable in-memory caching | `true` | No |
 | `CACHE_TTL_SECONDS` | Cache TTL in seconds | `300` | No |
+| `COSMOS_DB_CONNECTION_STRING` | Cosmos DB connection string | - | No (if logging enabled) |
+| `COSMOS_DB_DATABASE_NAME` | Cosmos DB database name | - | No (if logging enabled) |
+| `COSMOS_DB_CONTAINER_NAME` | Cosmos DB container name | `execution-logs` | No |
+| `KEY_VAULT_NAME` | Azure Key Vault name | - | No (if using Key Vault) |
 
 ### Aggregate Methods
 
@@ -332,32 +370,47 @@ Calculate price differences for a specified symbol and periods.
 
 ## 💡 Usage Examples
 
-### Getting Your Function Key
+### No Function Key Required!
 
-When you run `func start`, the output will include function keys. Look for a line like:
+The HTTP function is configured with `AuthorizationLevel.Anonymous`, so **no function key is needed** for local testing. You can call it directly:
+
+```bash
+# Simple GET request - no key needed!
+curl "http://localhost:7071/api/PriceDiffHttpFunction"
+
+# With custom parameters - no key needed!
+curl "http://localhost:7071/api/PriceDiffHttpFunction?symbol=ETHUSDT&periods=30,60,90"
 ```
-PriceDiffHttpFunction: [GET,POST] http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY_HERE
+
+**Example Output from `func start`:**
+```
+Functions:
+    PriceDiffHttpFunction: [GET,POST] http://localhost:7071/api/PriceDiffHttpFunction
+
+Host started
 ```
 
-Copy the `code` value after `?code=` for use in your curl commands.
-
-**Alternative for Local Testing**: You can temporarily change `AuthorizationLevel.Function` to `AuthorizationLevel.Anonymous` in `PriceDiffHttpFunction.cs` to test without a key.
+⚠️ **Production Security**: For production deployments exposed to the internet, consider:
+- Changing to `AuthorizationLevel.Function` in `PriceDiffHttpFunction.cs`
+- Using Azure App Service Authentication
+- Implementing API Management with authentication
+- Using network restrictions (VNet integration)
 
 ### Basic JSON Response
 
 ```bash
-# GET request with defaults (requires function key)
-curl "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY"
+# GET request with defaults (no key needed!)
+# Note: Timer trigger uses defaults, but HTTP allows custom parameters
+curl "http://localhost:7071/api/PriceDiffHttpFunction"
 
-# GET request with custom symbol and periods
-curl "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY&symbol=ETHUSDT&periods=30,60,90"
+# GET request with custom symbol and periods (HTTP trigger allows customization)
+curl "http://localhost:7071/api/PriceDiffHttpFunction?symbol=ETHUSDT&periods=30,60,90"
 
-# Using function key in header (alternative method)
-curl -H "x-functions-key: YOUR_FUNCTION_KEY" \
-  "http://localhost:7071/api/PriceDiffHttpFunction?symbol=ETHUSDT&periods=30,60,90"
+# GET request with custom interval and aggregate method
+curl "http://localhost:7071/api/PriceDiffHttpFunction?symbol=BTCUSDT&periods=7,30&interval=1h&aggregate=avg"
 
-# POST request with JSON body
-curl -X POST "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY" \
+# POST request with JSON body (no key needed!)
+curl -X POST "http://localhost:7071/api/PriceDiffHttpFunction" \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "SOLUSDT",
@@ -370,40 +423,41 @@ curl -X POST "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION
 ### Generate Excel Report
 
 ```bash
-# Get Excel report as download
-curl "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY&symbol=BTCUSDT&report=excel" \
+# Get Excel report as download (no key needed!)
+curl "http://localhost:7071/api/PriceDiffHttpFunction?symbol=BTCUSDT&report=excel" \
   --output report.xlsx
 
 # Send Excel report via email
-curl "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY&symbol=BTCUSDT&report=excel&email=true"
+curl "http://localhost:7071/api/PriceDiffHttpFunction?symbol=BTCUSDT&report=excel&email=true"
 ```
 
 ### Custom Date Range
 
 ```bash
 # Calculate as of specific date
-curl "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY&symbol=BTCUSDT&asOf=2025-11-01T00:00:00Z"
+curl "http://localhost:7071/api/PriceDiffHttpFunction?symbol=BTCUSDT&asOf=2025-11-01T00:00:00Z"
 ```
 
 ### Different Aggregation Methods
 
 ```bash
 # Use average price
-curl "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY&symbol=BTCUSDT&aggregate=avg"
+curl "http://localhost:7071/api/PriceDiffHttpFunction?symbol=BTCUSDT&aggregate=avg"
 
 # Use OHLC4
-curl "http://localhost:7071/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY&symbol=BTCUSDT&aggregate=ohlc4"
+curl "http://localhost:7071/api/PriceDiffHttpFunction?symbol=BTCUSDT&aggregate=ohlc4"
 ```
 
 ### Production (Azure)
 
-```bash
-# Include function key in query string
-curl "https://your-function-app.azurewebsites.net/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY&symbol=BTCUSDT"
+⚠️ **Important**: For production, you should enable authentication. Options:
+1. Change to `AuthorizationLevel.Function` and use function keys
+2. Use Azure App Service Authentication
+3. Use API Management with authentication
 
-# Or use header
-curl -H "x-functions-key: YOUR_FUNCTION_KEY" \
-  "https://your-function-app.azurewebsites.net/api/PriceDiffHttpFunction?symbol=BTCUSDT"
+```bash
+# If using AuthorizationLevel.Function in production:
+curl "https://your-function-app.azurewebsites.net/api/PriceDiffHttpFunction?code=YOUR_FUNCTION_KEY&symbol=BTCUSDT"
 ```
 
 ### Quick Test Script
@@ -412,19 +466,18 @@ Save this as `test-function.sh` and make it executable:
 
 ```bash
 #!/bin/bash
-# Replace YOUR_FUNCTION_KEY with the actual key from func start output
+# No function key needed - AuthorizationLevel.Anonymous
 
-FUNCTION_KEY="YOUR_FUNCTION_KEY"
 BASE_URL="http://localhost:7071/api/PriceDiffHttpFunction"
 
 echo "Testing with defaults..."
-curl "${BASE_URL}?code=${FUNCTION_KEY}"
+curl "${BASE_URL}"
 
 echo -e "\n\nTesting with ETHUSDT..."
-curl "${BASE_URL}?code=${FUNCTION_KEY}&symbol=ETHUSDT&periods=30,60"
+curl "${BASE_URL}?symbol=ETHUSDT&periods=30,60"
 
 echo -e "\n\nTesting POST request..."
-curl -X POST "${BASE_URL}?code=${FUNCTION_KEY}" \
+curl -X POST "${BASE_URL}" \
   -H "Content-Type: application/json" \
   -d '{"symbol": "SOLUSDT", "periods": "7,30"}'
 ```
@@ -444,10 +497,14 @@ Run with: `chmod +x test-function.sh && ./test-function.sh`
 ├── BinanceService.cs                  # Binance API client, klines fetch, close-candle logic
 ├── CalculationService.cs              # Period slicing, metrics calculation
 ├── ExcelService.cs                    # Excel report generation (in-memory .xlsx)
-├── EmailService.cs                    # Gmail OAuth2 / App Password via SMTP
-├── Models.cs                          # DTOs: requests, responses, klines, results
+├── EmailService.cs                    # Microsoft Graph email sending
+├── CosmosDbLoggingService.cs          # Cosmos DB execution logging
+├── KeyVaultService.cs                 # Azure Key Vault integration
+├── Models.cs                          # DTOs: requests, responses, klines, results, log entries
 ├── Validation.cs                      # Symbol/period validators
 ├── Settings.cs                        # IOptions<> bindings for app settings
+├── scripts/
+│   └── manage-keyvault.sh             # Key Vault management script
 └── README.md                          # This file
 ```
 
@@ -477,12 +534,40 @@ dotnet test
 Services are registered in `Program.cs`:
 
 ```csharp
+builder.Services.AddSingleton<KeyVaultService>();
 builder.Services.AddSingleton<BinanceService>();
 builder.Services.AddSingleton<CalculationService>();
 builder.Services.AddSingleton<ExcelService>();
 builder.Services.AddSingleton<EmailService>();
-builder.Services.Configure<AppSettings>(builder.Configuration);
+builder.Services.AddSingleton<CosmosDbLoggingService>();
+builder.Services.Configure<AppSettings>(...); // With Key Vault support
 ```
+
+### Azure Key Vault Management
+
+Use the provided script to manage secrets:
+
+```bash
+# Login to Azure
+./scripts/manage-keyvault.sh login
+
+# Create a new Key Vault
+./scripts/manage-keyvault.sh create --vault-name cryptodiffs-kv --resource-group cryptodiffs-rg
+
+# Set a single secret
+./scripts/manage-keyvault.sh set --vault-name cryptodiffs-kv --secret-name GRAPH_CLIENT_ID --secret-value "your-value"
+
+# Set all secrets from local.settings.json
+./scripts/manage-keyvault.sh setup-all --vault-name cryptodiffs-kv
+
+# List all secrets
+./scripts/manage-keyvault.sh list --vault-name cryptodiffs-kv
+
+# Get a secret value
+./scripts/manage-keyvault.sh get --vault-name cryptodiffs-kv --secret-name GRAPH_CLIENT_ID
+```
+
+**Key Vault Priority**: The application checks Key Vault first, then falls back to local configuration, then defaults.
 
 ### Adding New Features
 
@@ -509,11 +594,12 @@ builder.Services.Configure<AppSettings>(builder.Configuration);
 **Problem**: Emails not being delivered
 
 **Solutions**:
-- **OAuth2**: Verify refresh token is valid and not expired
-- **App Password**: Ensure 2FA is enabled and app password is correct
-- Check SMTP settings: Port 587 with TLS
-- Verify `MAIL_TO` and `MAIL_FROM` are valid Gmail addresses
-- Check Application Insights logs for detailed error messages
+- **Microsoft Graph**: Verify client ID, secret, and tenant ID are correct
+- Ensure the Azure AD app has `Mail.Send` permission (Application permission)
+- Grant admin consent for the permission
+- Verify `MAIL_TO`, `MAIL_FROM`, `MAIL_CC`, and `MAIL_BCC` are valid email addresses
+- Check Cosmos DB logs for detailed error messages
+- Verify the sender account has permission to send emails
 
 #### 3. Invalid Symbol Error
 
@@ -542,21 +628,40 @@ builder.Services.Configure<AppSettings>(builder.Configuration);
 - Check `AzureWebJobsStorage` setting: `UseDevelopmentStorage=true`
 - In devcontainer, supervisord should start Azurite automatically
 
-#### 6. Function Key Authentication
+#### 6. Authentication (Production)
 
-**Problem**: `401 Unauthorized` or `403 Forbidden` error
+**Problem**: Need to secure the HTTP endpoint in production
 
-**Solution**:
-- **Local Development**: 
-  - Get the function key from `func start` console output
-  - Include in query string: `?code=YOUR_KEY`
-  - Or use header: `-H "x-functions-key: YOUR_KEY"`
-  - For easier testing, temporarily change `AuthorizationLevel.Function` to `AuthorizationLevel.Anonymous` in `PriceDiffHttpFunction.cs`
-- **Production**:
-  - Include function key in request: `?code=YOUR_KEY`
-  - Or use `x-functions-key` header
-  - Verify key in Azure Portal → Function App → Functions → Your Function → Function Keys
-  - Master key works for all functions, function-specific keys only work for that function
+**Solutions**:
+- **Current Setup**: HTTP function uses `AuthorizationLevel.Anonymous` (no authentication required)
+- **For Production Security**:
+  1. Change `AuthorizationLevel.Anonymous` to `AuthorizationLevel.Function` in `PriceDiffHttpFunction.cs`
+  2. Get function key from Azure Portal → Function App → Functions → PriceDiffHttpFunction → Function Keys
+  3. Include key in requests: `?code=YOUR_KEY` or header `x-functions-key: YOUR_KEY`
+  4. Alternative: Use Azure App Service Authentication
+  5. Alternative: Use API Management with authentication policies
+  6. Alternative: Use VNet integration to restrict network access
+
+#### 7. Key Vault Access Issues
+
+**Problem**: Cannot access secrets from Key Vault
+
+**Solutions**:
+- Ensure `KEY_VAULT_NAME` is set in Function App settings
+- Verify the Function App's managed identity has "Key Vault Secrets User" role on the Key Vault
+- For local development, ensure you're logged in via `az login`
+- Check that secrets exist in Key Vault using `./scripts/manage-keyvault.sh list`
+- Application will fall back to local configuration if Key Vault is unavailable
+
+#### 8. Cosmos DB Logging Not Working
+
+**Problem**: Logs not appearing in Cosmos DB
+
+**Solutions**:
+- Verify `COSMOS_DB_CONNECTION_STRING`, `COSMOS_DB_DATABASE_NAME`, and `COSMOS_DB_CONTAINER_NAME` are set
+- Ensure the Cosmos DB account and database exist
+- Check that the connection string is valid and has proper permissions
+- Application will continue to work even if Cosmos DB logging fails (logs to Serilog only)
 
 ### Debugging Tips
 
@@ -568,10 +673,13 @@ builder.Services.Configure<AppSettings>(builder.Configuration);
 ## ✅ Acceptance Criteria
 
 - [x] HTTP call with defaults returns JSON including per-period diffs
+- [x] HTTP call allows custom parameters (symbol, periods, interval, aggregate)
 - [x] HTTP call with `report=excel&email=true` sends an email with .xlsx attached
-- [x] Timer runs every 5 minutes, logs a result, and (if enabled) sends an email
+- [x] Timer runs every 3 minutes, uses default settings, logs to Cosmos DB, and (if enabled) sends an email
 - [x] Uses last fully closed daily candle (no partial day bias)
 - [x] Handles network errors with retries; returns helpful messages on failure
+- [x] Comprehensive Cosmos DB logging for all executions and stages
+- [x] Azure Key Vault integration with local fallback
 - [x] Works end-to-end inside devcontainer with Azurite up (even if not used yet)
 
 ## 📝 License
@@ -588,4 +696,23 @@ For issues, questions, or contributions, please [open an issue](link-to-issues) 
 
 ---
 
-**Last Updated**: 2025-01-XX
+**Last Updated**: 2025-01-11
+
+## 🔐 Security & Configuration
+
+### Configuration Priority
+
+The application uses the following priority order for configuration values:
+
+1. **Azure Key Vault** (if `KEY_VAULT_NAME` is set)
+2. **Local Configuration** (`local.settings.json` or environment variables)
+3. **Default Values** (hardcoded in code)
+
+This allows secure production deployments while maintaining local development flexibility.
+
+### Timer vs HTTP Behavior
+
+- **Timer Trigger**: Always uses default settings from configuration (`DEFAULT_PERIODS`, `DEFAULT_INTERVAL`, etc.)
+- **HTTP Trigger**: Allows full customization via query parameters or JSON body
+
+This design ensures consistent automated reports while providing flexibility for manual testing and custom requests.

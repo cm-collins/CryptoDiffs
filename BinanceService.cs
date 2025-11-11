@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 
 namespace CryptoDiffs;
@@ -13,7 +13,7 @@ public class BinanceService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<BinanceService> _logger;
-    private readonly IConfiguration _configuration;
+    private readonly AppSettings _settings;
     private readonly ConcurrentDictionary<string, KlineCacheEntry> _cache;
     private readonly bool _cacheEnabled;
     private readonly int _cacheTtlSeconds;
@@ -23,20 +23,19 @@ public class BinanceService
     public BinanceService(
         HttpClient httpClient,
         ILogger<BinanceService> logger,
-        IConfiguration configuration)
+        IOptions<AppSettings> settings)
     {
         _httpClient = httpClient;
         _logger = logger;
-        _configuration = configuration;
+        _settings = settings.Value;
         _cache = new ConcurrentDictionary<string, KlineCacheEntry>();
 
         // Configure base URL
-        var baseUrl = _configuration["BINANCE_BASE_URL"] ?? "https://api.binance.com";
-        _httpClient.BaseAddress = new Uri(baseUrl);
+        _httpClient.BaseAddress = new Uri(_settings.BinanceBaseUrl);
 
         // Cache configuration
-        _cacheEnabled = bool.Parse(_configuration["ENABLE_CACHE"] ?? "true");
-        _cacheTtlSeconds = int.Parse(_configuration["CACHE_TTL_SECONDS"] ?? "300");
+        _cacheEnabled = _settings.EnableCache;
+        _cacheTtlSeconds = _settings.CacheTtlSeconds;
     }
 
     /// <summary>

@@ -320,14 +320,26 @@ public class BinanceKlinesResponse
 public class EmailRequest
 {
     /// <summary>
-    /// Recipient email address.
-    /// Must be a valid email format.
+    /// Recipient email address(es). Comma-separated for multiple recipients.
+    /// Must be valid email format(s).
     /// </summary>
     public string To { get; set; } = string.Empty;
 
     /// <summary>
+    /// CC (Carbon Copy) email address(es). Comma-separated for multiple recipients.
+    /// Optional.
+    /// </summary>
+    public string? Cc { get; set; }
+
+    /// <summary>
+    /// BCC (Blind Carbon Copy) email address(es). Comma-separated for multiple recipients.
+    /// Optional.
+    /// </summary>
+    public string? Bcc { get; set; }
+
+    /// <summary>
     /// Sender email address.
-    /// Must match the authenticated Gmail account.
+    /// Must match the authenticated Microsoft account.
     /// </summary>
     public string From { get; set; } = string.Empty;
 
@@ -344,7 +356,7 @@ public class EmailRequest
 
     /// <summary>
     /// Excel file attachment as byte array.
-    /// Maximum size: 25 MB (Gmail limit).
+    /// Maximum size: 25 MB (Microsoft Graph limit).
     /// </summary>
     public byte[]? Attachment { get; set; }
 
@@ -365,7 +377,7 @@ public class EmailResponse
     public bool Success { get; set; }
 
     /// <summary>
-    /// Gmail message ID if email was sent successfully.
+    /// Microsoft Graph message ID if email was sent successfully.
     /// Can be used for tracking or logging purposes.
     /// </summary>
     public string? MessageId { get; set; }
@@ -448,6 +460,244 @@ public class PriceDiffComputedEvent
     /// Timestamp when the calculation was performed.
     /// </summary>
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+}
+
+#endregion
+
+#region Cosmos DB Logging Models
+
+/// <summary>
+/// Base log entry for Cosmos DB.
+/// All log entries inherit from this for consistent structure.
+/// </summary>
+public abstract class CosmosLogEntry
+{
+    /// <summary>
+    /// Unique ID for the log entry (Cosmos DB document ID).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public string Id { get; set; } = Guid.NewGuid().ToString();
+
+    /// <summary>
+    /// Tenant ID for Cosmos DB partition key.
+    /// </summary>
+    public string TenantId { get; set; } = "default";
+
+    /// <summary>
+    /// Type of log entry (e.g., "ExecutionLog", "StageLog", "ErrorLog").
+    /// </summary>
+    public string LogType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Timestamp when the log entry was created (UTC).
+    /// </summary>
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Execution ID that groups related log entries together.
+    /// </summary>
+    public string ExecutionId { get; set; } = Guid.NewGuid().ToString();
+}
+
+/// <summary>
+/// Main execution log entry for HTTP or Timer triggers.
+/// Tracks the entire execution flow from start to finish.
+/// </summary>
+public class ExecutionLogEntry : CosmosLogEntry
+{
+    public ExecutionLogEntry()
+    {
+        LogType = "ExecutionLog";
+    }
+
+    /// <summary>
+    /// Trigger type: "http" or "timer".
+    /// </summary>
+    public string Trigger { get; set; } = string.Empty;
+
+    /// <summary>
+    /// HTTP method if triggered via HTTP (GET, POST).
+    /// </summary>
+    public string? HttpMethod { get; set; }
+
+    /// <summary>
+    /// Request parameters received.
+    /// </summary>
+    public PriceDiffRequest? Request { get; set; }
+
+    /// <summary>
+    /// Overall execution status: "Success", "Failed", "Partial".
+    /// </summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Total execution duration in milliseconds.
+    /// </summary>
+    public long DurationMs { get; set; }
+
+    /// <summary>
+    /// Symbol that was processed.
+    /// </summary>
+    public string? Symbol { get; set; }
+
+    /// <summary>
+    /// Periods that were calculated.
+    /// </summary>
+    public List<int>? Periods { get; set; }
+
+    /// <summary>
+    /// Final response data (if successful).
+    /// </summary>
+    public PriceDiffResponse? Response { get; set; }
+
+    /// <summary>
+    /// Error information if execution failed.
+    /// </summary>
+    public ErrorInfo? Error { get; set; }
+
+    /// <summary>
+    /// List of stage log IDs for this execution.
+    /// </summary>
+    public List<string> StageLogIds { get; set; } = new();
+
+    /// <summary>
+    /// Email sending information.
+    /// </summary>
+    public EmailLogInfo? EmailInfo { get; set; }
+
+    /// <summary>
+    /// Additional metadata for this execution.
+    /// </summary>
+    public Dictionary<string, object>? Metadata { get; set; }
+}
+
+/// <summary>
+/// Stage log entry for individual operation stages.
+/// Tracks each step in the execution pipeline.
+/// </summary>
+public class StageLogEntry : CosmosLogEntry
+{
+    public StageLogEntry()
+    {
+        LogType = "StageLog";
+    }
+
+    /// <summary>
+    /// Stage name (e.g., "RequestParsing", "Validation", "BinanceFetch", "Calculation", "ExcelGeneration", "EmailSending").
+    /// </summary>
+    public string StageName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Stage status: "Success", "Failed", "Skipped".
+    /// </summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Stage duration in milliseconds.
+    /// </summary>
+    public long DurationMs { get; set; }
+
+    /// <summary>
+    /// Input data for this stage.
+    /// </summary>
+    public Dictionary<string, object>? InputData { get; set; }
+
+    /// <summary>
+    /// Output data from this stage.
+    /// </summary>
+    public Dictionary<string, object>? OutputData { get; set; }
+
+    /// <summary>
+    /// Error information if stage failed.
+    /// </summary>
+    public ErrorInfo? Error { get; set; }
+
+    /// <summary>
+    /// Additional metadata for this stage.
+    /// </summary>
+    public Dictionary<string, object>? Metadata { get; set; }
+}
+
+/// <summary>
+/// Error information structure.
+/// </summary>
+public class ErrorInfo
+{
+    /// <summary>
+    /// Error message.
+    /// </summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Error type/exception name.
+    /// </summary>
+    public string? ErrorType { get; set; }
+
+    /// <summary>
+    /// Stack trace (if available).
+    /// </summary>
+    public string? StackTrace { get; set; }
+
+    /// <summary>
+    /// Inner error information.
+    /// </summary>
+    public ErrorInfo? InnerError { get; set; }
+}
+
+/// <summary>
+/// Email logging information.
+/// </summary>
+public class EmailLogInfo
+{
+    /// <summary>
+    /// Recipient email addresses (To).
+    /// </summary>
+    public string To { get; set; } = string.Empty;
+
+    /// <summary>
+    /// CC recipient email addresses.
+    /// </summary>
+    public string? Cc { get; set; }
+
+    /// <summary>
+    /// BCC recipient email addresses.
+    /// </summary>
+    public string? Bcc { get; set; }
+
+    /// <summary>
+    /// Sender email address.
+    /// </summary>
+    public string From { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Email subject.
+    /// </summary>
+    public string Subject { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether email was sent successfully.
+    /// </summary>
+    public bool Sent { get; set; }
+
+    /// <summary>
+    /// Microsoft Graph message ID (if sent).
+    /// </summary>
+    public string? MessageId { get; set; }
+
+    /// <summary>
+    /// Attachment filename.
+    /// </summary>
+    public string? AttachmentFileName { get; set; }
+
+    /// <summary>
+    /// Attachment size in bytes.
+    /// </summary>
+    public long? AttachmentSizeBytes { get; set; }
+
+    /// <summary>
+    /// Error message if email sending failed.
+    /// </summary>
+    public string? Error { get; set; }
 }
 
 #endregion
